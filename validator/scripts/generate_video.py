@@ -349,10 +349,29 @@ def _load_agent(extracted: Path):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+ENV_SCENARIO_RENDER = "SWARM_SCENARIO_RENDER"
+_RENDER_LOOK: Dict[str, Any] = {}  # getCameraImage light/sky/haze arguments of the flight in progress
+
+
+def _apply_scenario_look(map_seed: int, challenge_type: int) -> Optional[Any]:
+    """Light the colour cameras by the seed's scenario (sun or moon, weather sky, haze) when
+    SWARM_SCENARIO_RENDER is on; otherwise they keep the fixed light. Returns the scenario or None."""
+    _RENDER_LOOK.clear()
+    if os.environ.get(ENV_SCENARIO_RENDER, "").strip().lower() not in ("1", "true", "yes", "on"):
+        return None
+    from swarm.core.scenario import render_kwargs, scenario_for_seed
+
+    spec = scenario_for_seed(int(map_seed), int(challenge_type))
+    _RENDER_LOOK.update(render_kwargs(spec))
+    print(f"[video] scenario look: {spec.label()}")
+    return spec
+
+
 def _render_rgb(cli: int, view, proj, w: int, h: int) -> np.ndarray:
     """RGB render with shadows disabled for performance."""
     import pybullet as p
 
+    look = {"lightDirection": [0.4, 0.4, 1.0], **_RENDER_LOOK}
     _, _, rgba, _, _ = p.getCameraImage(
         width=w,
         height=h,
@@ -360,8 +379,8 @@ def _render_rgb(cli: int, view, proj, w: int, h: int) -> np.ndarray:
         projectionMatrix=proj,
         renderer=p.ER_TINY_RENDERER,
         shadow=0,
-        lightDirection=[0.4, 0.4, 1.0],
         physicsClientId=cli,
+        **look,
     )
     return np.asarray(rgba, dtype=np.uint8).reshape(h, w, 4)[:, :, :3]
 
@@ -956,6 +975,7 @@ def record_flight_benchmark(
     task = task_for_seed_and_type(
         SIM_DT, seed=seed, challenge_type=challenge_type, family_id=family_id,
     )
+    _apply_scenario_look(getattr(task, "map_seed", seed), challenge_type)
     uid = _infer_uid_from_model_path(model_path)
     recorder = _FlightRecorder(
         seed=seed,
@@ -1107,6 +1127,7 @@ def record_flight(
 
     # --- environment ----------------------------------------------------
     task = build_task(seed, challenge_type, family_id=family_id)
+    _apply_scenario_look(getattr(task, "map_seed", seed), challenge_type)
     _ensure_local_ansible_temp()
     from swarm.utils.env_factory import make_env
 

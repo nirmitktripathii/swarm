@@ -360,8 +360,31 @@ def scenario_for_seed(seed: int, challenge_type: int) -> ScenarioSpec:
     return sample_scenario(seed, challenge_type, **scenario_overrides_from_env())
 
 
+def render_kwargs(spec: ScenarioSpec) -> Dict[str, Any]:
+    """`getCameraImage` arguments that light a colour frame the way the scenario says.
+
+    The sun's (or moon's) direction, colour and strength, the haze distance of the weather, and the
+    sky colours when the weather or the night carries one. Clear daytime sets no sky, so the
+    renderer keeps its own. The haze and sky arguments need the swarm-bullet3 renderer.
+    """
+    sun = spec.sun
+    kwargs: Dict[str, Any] = {
+        "lightDirection": list(sun.direction),
+        "lightColor": list(sun.color),
+        "lightAmbientCoeff": sun.ambient,
+        "lightDiffuseCoeff": sun.diffuse,
+        "hazeDistance": spec.haze_m,
+    }
+    sky = spec.sky()
+    if sky is not None:
+        horizon, zenith = sky
+        kwargs["skyHorizonColor"] = list(horizon)
+        kwargs["skyZenithColor"] = list(zenith)
+    return kwargs
+
+
 __all__ = [
     "SEASONS", "TIMES_OF_DAY", "WEATHERS", "WEATHER_MODELS", "ScenarioSpec", "WeatherModel",
-    "air_density_ratio", "sample_scenario", "scenario_for_seed", "scenario_overrides_from_env",
-    "sun_for_time",
+    "air_density_ratio", "render_kwargs", "sample_scenario", "scenario_for_seed",
+    "scenario_overrides_from_env", "sun_for_time",
 ]

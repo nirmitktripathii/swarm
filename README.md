@@ -64,6 +64,11 @@ turbulence, gusts) and air (site altitude and temperature, giving an air-density
 its own random stream, so pinning one factor leaves the others unchanged, which makes paired comparisons possible.
 Pin factors with `SWARM_SCENARIO_SEASON`, `SWARM_SCENARIO_TIME` or `SWARM_SCENARIO_WEATHER`.
 
+Season reaches the geometry of the four biome maps and visibility reaches the ToF model. Time of day and weather
+reach the colour cameras of `swarm video` only when `SWARM_SCENARIO_RENDER=1` is set: the sun or moon, the weather's
+sky colours and the haze distance are then passed to the renderer (`scenario.render_kwargs`). Without the switch the
+videos keep their fixed light, as upstream. The haze and sky arguments need the swarm-bullet3 renderer build.
+
 ### Would a ToF sensor have seen that wire? (`swarm/core/tof_wire_model.py`)
 
 A 4 mm conductor is far below one pixel of a 128 px depth image. The renderer draws it in a few lucky pixels or
