@@ -115,6 +115,10 @@ TYPE_LABELS: Dict[int, str] = {
     5: "warehouse",
     6: "forest",
     7: "office",
+    8: "farmland",
+    9: "powerline",
+    10: "terraced_hills",
+    11: "river_coast",
 }
 BENCH_GROUP_ORDER: List[str] = [
     "type1_city",
@@ -350,19 +354,25 @@ def _load_agent(extracted: Path):
 
 
 ENV_SCENARIO_RENDER = "SWARM_SCENARIO_RENDER"
-_RENDER_LOOK: Dict[str, Any] = {}  # getCameraImage light/sky/haze arguments of the flight in progress
+_RENDER_LOOK: Dict[str, Any] = {}  # getCameraImage light arguments of the flight in progress
+_ATMOSPHERE: Optional[Any] = None  # haze and sky of that flight, applied to each frame in software
 
 
 def _apply_scenario_look(map_seed: int, challenge_type: int) -> Optional[Any]:
     """Light the colour cameras by the seed's scenario (sun or moon, weather sky, haze) when
     SWARM_SCENARIO_RENDER is on; otherwise they keep the fixed light. Returns the scenario or None."""
+    global _ATMOSPHERE
     _RENDER_LOOK.clear()
+    _ATMOSPHERE = None
     if os.environ.get(ENV_SCENARIO_RENDER, "").strip().lower() not in ("1", "true", "yes", "on"):
         return None
+    from swarm.core.atmosphere import RENDERER_ONLY_KEYS, atmosphere_for
     from swarm.core.scenario import render_kwargs, scenario_for_seed
 
     spec = scenario_for_seed(int(map_seed), int(challenge_type))
-    _RENDER_LOOK.update(render_kwargs(spec))
+    # Stock pybullet rejects the haze and sky arguments, so only the light goes to the renderer.
+    _RENDER_LOOK.update({k: v for k, v in render_kwargs(spec).items() if k not in RENDERER_ONLY_KEYS})
+    _ATMOSPHERE = atmosphere_for(spec)
     print(f"[video] scenario look: {spec.label()}")
     return spec
 
@@ -372,7 +382,7 @@ def _render_rgb(cli: int, view, proj, w: int, h: int) -> np.ndarray:
     import pybullet as p
 
     look = {"lightDirection": [0.4, 0.4, 1.0], **_RENDER_LOOK}
-    _, _, rgba, _, _ = p.getCameraImage(
+    _, _, rgba, zbuf, _ = p.getCameraImage(
         width=w,
         height=h,
         viewMatrix=view,
@@ -382,7 +392,13 @@ def _render_rgb(cli: int, view, proj, w: int, h: int) -> np.ndarray:
         physicsClientId=cli,
         **look,
     )
-    return np.asarray(rgba, dtype=np.uint8).reshape(h, w, 4)[:, :, :3]
+    rgb = np.asarray(rgba, dtype=np.uint8).reshape(h, w, 4)[:, :, :3]
+    if _ATMOSPHERE is None:
+        return rgb
+    from swarm.core.atmosphere import apply_atmosphere, projection_planes
+
+    near, far = projection_planes(proj)
+    return apply_atmosphere(rgb, np.asarray(zbuf).reshape(h, w), near, far, _ATMOSPHERE)
 
 
 def _render_depth(
@@ -1362,9 +1378,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--type",
         type=int,
         default=None,
-        choices=[1, 2, 3, 4, 5, 6, 7],
+        choices=sorted(TYPE_LABELS),
         metavar="TYPE",
-        help="challenge type  (1=City 2=Open 3=Mountain 4=Village 5=Warehouse 6=Forest 7=Office)",
+        help="challenge type  (1=City 2=Open 3=Mountain 4=Village 5=Warehouse 6=Forest 7=Office; "
+             "opt-in biome maps 8=Farmland 9=Powerline 10=Terraced hills 11=River/coast)",
     )
     req.add_argument(
         "--seed-file",

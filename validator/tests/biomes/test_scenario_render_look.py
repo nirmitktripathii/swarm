@@ -28,6 +28,11 @@ from swarm.core.scenario import render_kwargs, sample_scenario
 
 SEED, CHALLENGE_TYPE = 7, 8
 FIXED_LIGHT = [0.4, 0.4, 1.0]
+# the keyword arguments stock pybullet's getCameraImage takes, as used by the video cameras
+STOCK_KWARGS = {"width", "height", "viewMatrix", "projectionMatrix", "renderer", "shadow",
+                "physicsClientId", "lightDirection", "lightColor", "lightAmbientCoeff",
+                "lightDiffuseCoeff"}
+PROJECTION = p.computeProjectionMatrixFOV(60.0, 1.6, 0.1, 100.0)
 
 
 def test_a_clear_day_sets_the_light_and_haze_but_no_sky():
@@ -70,17 +75,19 @@ def test_fog_is_far_thicker_than_clear_air():
     assert fog["hazeDistance"] * 10 < clear["hazeDistance"]
 
 
-def _fake_camera(captured):
+def _fake_camera(captured, depth=1.0):
+    """A stock-pybullet stand-in: records its arguments and fills the depth buffer with `depth`."""
     def get_camera_image(**kwargs):
         captured.update(kwargs)
         h, w = kwargs["height"], kwargs["width"]
-        return w, h, np.zeros((h, w, 4), dtype=np.uint8), None, None
+        return w, h, np.zeros((h, w, 4), dtype=np.uint8), np.full((h, w), depth, dtype=np.float32), None
     return get_camera_image
 
 
 @pytest.fixture(autouse=True)
 def _clean_look(monkeypatch):
     monkeypatch.delenv(generate_video.ENV_SCENARIO_RENDER, raising=False)
+    monkeypatch.setattr(generate_video, "_ATMOSPHERE", None)
     generate_video._RENDER_LOOK.clear()
     yield
     generate_video._RENDER_LOOK.clear()
@@ -91,14 +98,15 @@ def test_without_the_switch_the_cameras_keep_the_fixed_light(monkeypatch):
     monkeypatch.setattr(p, "getCameraImage", _fake_camera(captured))
 
     assert generate_video._apply_scenario_look(SEED, CHALLENGE_TYPE) is None
-    generate_video._render_rgb(0, None, None, 8, 6)
+    frame = generate_video._render_rgb(0, None, PROJECTION, 8, 6)
 
     assert captured["lightDirection"] == FIXED_LIGHT
-    assert "hazeDistance" not in captured and "lightColor" not in captured
+    assert set(captured) <= STOCK_KWARGS and "lightColor" not in captured
+    assert not frame.any(), "the frame is untouched"
 
 
 @pytest.mark.parametrize("value", ["1", "true", "YES", " on "])
-def test_with_the_switch_the_cameras_take_the_scenarios_look(monkeypatch, value):
+def test_with_the_switch_the_cameras_take_the_scenarios_light(monkeypatch, value):
     monkeypatch.setenv(generate_video.ENV_SCENARIO_RENDER, value)
     monkeypatch.setenv("SWARM_SCENARIO_WEATHER", "fog")
     monkeypatch.setenv("SWARM_SCENARIO_TIME", "dusk")
@@ -106,20 +114,71 @@ def test_with_the_switch_the_cameras_take_the_scenarios_look(monkeypatch, value)
     monkeypatch.setattr(p, "getCameraImage", _fake_camera(captured))
 
     spec = generate_video._apply_scenario_look(SEED, CHALLENGE_TYPE)
-    generate_video._render_rgb(0, None, None, 8, 6)
+    generate_video._render_rgb(0, None, PROJECTION, 8, 6)
 
     assert (spec.weather, spec.time_of_day) == ("fog", "dusk")
     assert captured["lightDirection"] == list(spec.sun.direction) != FIXED_LIGHT
-    assert captured["hazeDistance"] == spec.haze_m
-    assert captured["skyHorizonColor"] == list(spec.sky()[0])
+    assert captured["lightColor"] == list(spec.sun.color)
+
+
+def test_renderer_only_arguments_never_reach_stock_pybullet(monkeypatch):
+    """Kaggle's pybullet raised TypeError on hazeDistance; haze and sky are applied in software instead."""
+    monkeypatch.setenv(generate_video.ENV_SCENARIO_RENDER, "1")
+    monkeypatch.setenv("SWARM_SCENARIO_WEATHER", "fog")
+    captured = {}
+    monkeypatch.setattr(p, "getCameraImage", _fake_camera(captured))
+
+    generate_video._apply_scenario_look(SEED, CHALLENGE_TYPE)
+    generate_video._render_rgb(0, None, PROJECTION, 8, 6)
+
+    assert set(captured) <= STOCK_KWARGS, set(captured) - STOCK_KWARGS
+
+
+def test_fog_paints_the_sky_gradient_over_empty_pixels(monkeypatch):
+    monkeypatch.setenv(generate_video.ENV_SCENARIO_RENDER, "1")
+    monkeypatch.setenv("SWARM_SCENARIO_WEATHER", "fog")
+    monkeypatch.setenv("SWARM_SCENARIO_TIME", "day")
+    monkeypatch.setattr(p, "getCameraImage", _fake_camera({}, depth=1.0))
+
+    spec = generate_video._apply_scenario_look(SEED, CHALLENGE_TYPE)
+    frame = generate_video._render_rgb(0, None, PROJECTION, 8, 6)
+
+    horizon, zenith = spec.sky()
+    np.testing.assert_allclose(frame[0, 0], np.rint(np.array(zenith) * 255), atol=1)
+    np.testing.assert_allclose(frame[-1, 0], np.rint(np.array(horizon) * 255), atol=1)
+
+
+def test_fog_hides_a_distant_surface_but_a_clear_day_does_not(monkeypatch):
+    monkeypatch.setenv(generate_video.ENV_SCENARIO_RENDER, "1")
+    monkeypatch.setenv("SWARM_SCENARIO_TIME", "day")
+    z_at_60m = (100.0 - 100.0 * 0.1 / 60.0) / (100.0 - 0.1)  # depth-buffer value of a surface 60 m out
+    monkeypatch.setattr(p, "getCameraImage", _fake_camera({}, depth=z_at_60m))
+
+    def surface_brightness(weather):
+        monkeypatch.setenv("SWARM_SCENARIO_WEATHER", weather)
+        generate_video._apply_scenario_look(SEED, CHALLENGE_TYPE)
+        return generate_video._render_rgb(0, None, PROJECTION, 8, 6).astype(float).mean()
+
+    clear, fog = surface_brightness("clear"), surface_brightness("fog")
+
+    assert clear < 5.0, "a black surface stays black through clear air"
+    assert fog > 50.0, "fog fades it toward the fog colour"
 
 
 def test_the_look_is_reset_for_the_next_flight(monkeypatch):
     monkeypatch.setenv(generate_video.ENV_SCENARIO_RENDER, "1")
     generate_video._apply_scenario_look(SEED, CHALLENGE_TYPE)
-    assert generate_video._RENDER_LOOK
+    assert generate_video._RENDER_LOOK and generate_video._ATMOSPHERE is not None
 
     monkeypatch.delenv(generate_video.ENV_SCENARIO_RENDER)
     generate_video._apply_scenario_look(SEED + 1, CHALLENGE_TYPE)
 
-    assert generate_video._RENDER_LOOK == {}
+    assert generate_video._RENDER_LOOK == {} and generate_video._ATMOSPHERE is None
+
+
+@pytest.mark.parametrize("challenge_type", [8, 9, 10, 11])
+def test_the_video_cli_accepts_the_biome_maps(challenge_type):
+    assert challenge_type in generate_video.TYPE_LABELS
+    args = generate_video._build_parser().parse_args(
+        ["--model", "m.zip", "--seed", "1", "--type", str(challenge_type)])
+    assert args.type == challenge_type

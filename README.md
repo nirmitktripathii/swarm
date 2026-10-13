@@ -65,9 +65,11 @@ its own random stream, so pinning one factor leaves the others unchanged, which 
 Pin factors with `SWARM_SCENARIO_SEASON`, `SWARM_SCENARIO_TIME` or `SWARM_SCENARIO_WEATHER`.
 
 Season reaches the geometry of the four biome maps and visibility reaches the ToF model. Time of day and weather
-reach the colour cameras of `swarm video` only when `SWARM_SCENARIO_RENDER=1` is set: the sun or moon, the weather's
-sky colours and the haze distance are then passed to the renderer (`scenario.render_kwargs`). Without the switch the
-videos keep their fixed light, as upstream. The haze and sky arguments need the swarm-bullet3 renderer build.
+reach the colour cameras of `swarm video` only when `SWARM_SCENARIO_RENDER=1` is set. The sun or moon (direction,
+colour, ambient, diffuse) goes to `getCameraImage` as `scenario.render_kwargs` builds it. Haze and sky are applied to
+each finished frame from its depth buffer (`swarm/core/atmosphere.py`), because stock pybullet rejects
+`hazeDistance` and the sky colours; this works on a plain install. Without the switch the videos keep their fixed
+light, as upstream. `swarm video` and `visualize_map` accept the opt-in biome maps as `--type 8` to `11`.
 
 ### Would a ToF sensor have seen that wire? (`swarm/core/tof_wire_model.py`)
 

@@ -89,8 +89,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--type",
         type=int,
         required=True,
-        choices=[1, 2, 3, 4, 5, 6, 7],
-        help="Challenge type (1=City 2=Open 3=Mountain 4=Village 5=Warehouse 6=Forest 7=Office).",
+        choices=list(range(1, 12)),
+        help="Challenge type (1=City 2=Open 3=Mountain 4=Village 5=Warehouse 6=Forest 7=Office; "
+             "opt-in biome maps 8=Farmland 9=Powerline 10=Terraced hills 11=River/coast).",
     )
     parser.add_argument(
         "--family-id",
