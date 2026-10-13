@@ -26,6 +26,114 @@
 
 ---
 
+<!-- FORK -->
+## Changes in this fork vs upstream
+
+This fork ([nirmitktripathii/swarm](https://github.com/nirmitktripathii/swarm), branch `feat/india-biomes`) adds
+four Indian environments, a seeded scenario sampler, and a sensor-honest model of thin wires. It is based on
+upstream `swarm-subnet/swarm` at `38b36a2` (v5.1.6.5). Everything is **opt-in**: the new map types are not in
+`CHALLENGE_TYPE_DISTRIBUTION`, any benchmark group or any family's environment list, the wire model is off unless
+an environment variable turns it on, and stock score reports keep upstream's per-type keys. Stock seeds therefore
+build, place and score exactly as they do upstream.
+
+### Four new map types
+
+| Type | Name | What it is | Hazards |
+|---|---|---|---|
+| 8 | `farmland` | Row crops (maize, sugarcane, mustard, wheat), flooded paddy or a mango orchard, with bunds, field trees, and a pump house fed by an LT line. Crop height and stage follow the seeded season. | crop canopies, field trees, the LT line and its service drop |
+| 9 | `powerline` | A peri-urban road corridor with an 11 kV feeder, an LT line, service drops to huts, and stay wires, turned by a seeded yaw. | **wires** at 9-11 m, 6-7 m and 3-4 m, plus diagonal stays to the ground |
+| 10 | `terraced_hills` | A Himalayan valley side cut into 1.0-1.8 m stepped treads with wandering risers, stone huts and conifers. | risers, conifers, steep ground |
+| 11 | `river_coast` | An embanked river (seasonal width, levees, a road bridge on piers, boats, sometimes an LT line over the water) or a fishing coast (beach, palms, windbreak, jetty, lighthouse). | bridge deck at 4-6 m, piers, palms, wires |
+
+All four share the forest's 100 m footprint and task geometry, keep a 7.5 m-radius, 8 m-high clearing open at
+the start and goal, and never string a wire across a clearing. A field of rows or a terrace tread is one compound
+body, so the placement probes stay cheap. Shared primitives (shape cache, clearings, catenary wire spans, colour
+tints, tagging buckets) live in `swarm/core/maps/biome_kit.py`.
+
+Try one:
+
+```bash
+swarm visualize --type 9 --seed 3
+```
+
+### Seeded scenarios: season, time of day, weather, wind, air
+
+`swarm/core/scenario.py` draws, per seed, an Indian-calendar season (summer, monsoon, post-monsoon, winter, plus
+Himalayan snow), a time of day (sun or moon for the renderer), weather (sky colour, haze visibility, steady wind,
+turbulence, gusts) and air (site altitude and temperature, giving an air-density thrust scale). Every factor has
+its own random stream, so pinning one factor leaves the others unchanged, which makes paired comparisons possible.
+Pin factors with `SWARM_SCENARIO_SEASON`, `SWARM_SCENARIO_TIME` or `SWARM_SCENARIO_WEATHER`.
+
+### Would a ToF sensor have seen that wire? (`swarm/core/tof_wire_model.py`)
+
+A 4 mm conductor is far below one pixel of a 128 px depth image. The renderer draws it in a few lucky pixels or
+not at all, while the physics always collides with it. The model replaces the renderer's luck with a per-pixel
+detection probability:
+
+```text
+fill  = min(1, d / (R * ifov * min_pixels))       share of the pixel footprint the wire covers
+snr   = (fill * rho / 0.10) * (R_ref / R)^2 * exp(-2 * sigma * R)
+sigma = 3.912 / visibility                         Koschmieder extinction, two-way path
+P     = snr^k / (1 + snr^k)                         0.5 at snr = 1, the datasheet range point
+```
+
+Wire spans are projected with the same view and projection matrices the renderer used. Each wire pixel is then
+written into the depth image (detected) or painted over with the background from its column (missed). A wire
+behind a nearer surface stays hidden. Visibility comes from the seed's scenario, so fog shortens detection range.
+
+Turn it on with one variable (off by default):
+
+```bash
+export SWARM_TOF_WIRE_MODEL=livox_mid360
+```
+
+| Preset | Class | iFOV per pixel | `R_ref` (10 % target) |
+|---|---|---|---|
+| `vl53l7cx` | 8x8 multizone ToF | 7.5 deg | 1.7 m |
+| `tfmini_plus` | single-point ToF | 3.6 deg | 4.0 m |
+| `livox_mid360` | scanning lidar | 0.27 deg | 40 m |
+| `depth_cam` | active stereo depth (7-pixel matching window) | 0.10 deg | 6.0 m |
+
+The presets are representative of each class from public datasheet figures, not a calibration of any unit.
+The headline result: at 10 m a 6 mm black service drop is usually a lidar return (P about 0.87) and practically
+never a multizone-ToF one.
+
+### Where the new types are wired in
+
+| File | Change |
+|---|---|
+| `swarm/core/env_builder/sar_tagging.py` | dispatches types 8-11 to their builders, tags trees, props, wires (`OBSTACLE_BEAM`) and terrain, and registers each build's wires per physics client (empty for maps without wires) |
+| `swarm/core/moving_drone.py` | rewrites the depth buffer through the wire model before depth processing, in both the single and batched observation paths, when the switch is on |
+| `swarm/core/env_builder/platform_placement.py` | types 8, 9 and 11 use the forest's collision-scan placement but ignore the floor slab the pad rests on, so pads stay in their clearings; type 10 uses the raycast flat-spot placement, landing pads on level terrace notches |
+| `swarm/validator/task_gen.py` | types 8-11 take the forest's task geometry |
+| `swarm/domain_model/benchmark_domain_model.schema.json` | four new `environment_type` values and their challenge-type mapping |
+| `swarm/core/env_builder/victim.py` | victim models: open-ground for 8, 9 and 11, mountain for 10 |
+| `swarm/cli.py` | `--type` accepts 1-11, with labels |
+| `swarm/validator/utils_parts/evaluation.py` | the biome types get no default per-type score bucket |
+
+### Tests
+
+`validator/tests/biomes/` holds 69 tests:
+
+- **Map builders:** interval and catenary helpers, a 5 mm wire that still stops a drone at its sagged height,
+  same-seed determinism, clearings that stay open on every seed, no wire across a clearing, level terrace pads.
+- **Wire model:** monotonic in range and diameter, fog only lowers detection, the datasheet point at P = 0.5,
+  the env switch, projection checked against a real pybullet render, and the erase, write-in and occlusion cases.
+- **Dispatch:** opt-in registration, tagging and per-client wire registration across rebuilds, task generation,
+  and pads kept at their clearings with a free start over five seeds per type. This file needs `swarm_worlds`
+  installed and skips without it.
+
+```bash
+pytest validator/tests/biomes -n 0
+```
+
+The schema snapshot in `validator/tests/test_domain_model_contract.py` is updated for the four new types.
+New files carry the upstream MIT notice with an added copyright line for these extensions.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+---
+
 <!-- ABOUT -->
 ## What Is Swarm
 
