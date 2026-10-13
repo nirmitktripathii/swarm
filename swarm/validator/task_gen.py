@@ -151,6 +151,10 @@ TYPE_PARAMS = {
     },
 }
 
+# Opt-in biome maps (8 farmland, 9 powerline, 10 terraced hills, 11 river/coast) share the forest's
+# 100 m footprint, so they take its geometry; they are not in CHALLENGE_TYPE_DISTRIBUTION.
+TYPE_PARAMS.update({biome_type: dict(TYPE_PARAMS[6]) for biome_type in (8, 9, 10, 11)})
+
 
 def get_type_params(challenge_type: int) -> dict:
     """Geometry bounds for one challenge type, falling back to type 1 when it is unknown."""

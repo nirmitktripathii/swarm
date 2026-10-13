@@ -62,6 +62,11 @@ _CHALLENGE_TYPE_TO_MAP = {
     4: "village",
     5: "warehouse",
     6: "forest",
+    # Biome maps borrow the closest character set: flat country is "open", the terraces "mountain".
+    8: "open",
+    9: "open",
+    10: "mountain",
+    11: "open",
 }
 
 _manifest_characters: list | None = None

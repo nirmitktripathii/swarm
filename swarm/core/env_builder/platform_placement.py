@@ -160,12 +160,14 @@ def _find_clear_platform_position(
     allow_candidate_fallback: bool = True,
     min_obstacle_height: float = 0.0,
     keep_uids: frozenset = frozenset(),
+    skip_below_z: Optional[float] = None,
 ) -> Tuple[float, float, float]:
     """Return a pad spot clear of the world bodies and inside the required distance band.
 
     Falls back to the candidate position when allow_candidate_fallback is set,
     and raises RuntimeError otherwise. Bodies in keep_uids always count as
-    obstacles, however short they are.
+    obstacles, however short they are. With skip_below_z set, bodies whose top
+    is at or below that height (the floor slab a pad rests on) are not obstacles.
     """
     clearance = C.TYPE_4_PLATFORM_CLEARANCE
     platform_r = C.START_PLATFORM_RADIUS
@@ -173,7 +175,7 @@ def _find_clear_platform_position(
     wx, wy = world_range_x, world_range_y
 
     skip_bodies: Optional[set] = None
-    if min_obstacle_height > 0:
+    if min_obstacle_height > 0 or skip_below_z is not None:
         skip_bodies = set()
         for bid in range(body_count_before, p.getNumBodies(physicsClientId=cli)):
             try:
@@ -181,7 +183,11 @@ def _find_clear_platform_position(
             except p.error:
                 skip_bodies.add(bid)
                 continue
-            if (mx[2] - mn[2]) <= min_obstacle_height and bid not in keep_uids:
+            if bid in keep_uids:
+                continue
+            if min_obstacle_height > 0 and (mx[2] - mn[2]) <= min_obstacle_height:
+                skip_bodies.add(bid)
+            elif skip_below_z is not None and mx[2] <= skip_below_z:
                 skip_bodies.add(bid)
 
     def _distance(
@@ -372,7 +378,7 @@ def _goal_distance_bounds(challenge_type: int) -> Optional[Tuple[float, float, s
         return (C.VILLAGE_R_MIN, C.VILLAGE_R_MAX, "xy")
     if challenge_type == 5:
         return (C.TYPE_4_R_MIN, C.TYPE_4_R_MAX, "xy")
-    if challenge_type == 6:
+    if challenge_type in (6, 8, 9, 10, 11):
         return (C.TYPE_6_R_MIN, C.TYPE_6_R_MAX, "xy")
     return None
 
@@ -419,8 +425,16 @@ def build_autopilot_world(tagger, cli, seed, start, goal, challenge_type,
         4: (C.TYPE_3_VILLAGE_RANGE, C.TYPE_3_VILLAGE_RANGE, 0.0, 0.0),
         5: (C.TYPE_4_WORLD_RANGE_X, C.TYPE_4_WORLD_RANGE_Y, C.TYPE_4_H_MIN, C.TYPE_4_H_MAX),
         6: (C.TYPE_6_WORLD_RANGE, C.TYPE_6_WORLD_RANGE, C.TYPE_6_H_MIN, C.TYPE_6_H_MAX),
+        # Flat biomes place like the forest; terraced hills (10) take the raycast flat-spot path below.
+        8: (C.TYPE_6_WORLD_RANGE, C.TYPE_6_WORLD_RANGE, C.TYPE_6_H_MIN, C.TYPE_6_H_MAX),
+        9: (C.TYPE_6_WORLD_RANGE, C.TYPE_6_WORLD_RANGE, C.TYPE_6_H_MIN, C.TYPE_6_H_MAX),
+        11: (C.TYPE_6_WORLD_RANGE, C.TYPE_6_WORLD_RANGE, C.TYPE_6_H_MIN, C.TYPE_6_H_MAX),
     }
     _VILLAGE_MIN_OBSTACLE_HEIGHT = 1.0
+    # The biome floor slab tops out at z = 0 (its AABB adds pybullet's small margin); without this skip every
+    # low pad overlaps the floor and is moved out of its carved clearing. The forest (6) keeps upstream behaviour.
+    _BIOME_FLOOR_TOP_Z = 0.05
+    floor_skip_z = _BIOME_FLOOR_TOP_Z if challenge_type in (8, 9, 11) else None
 
     if challenge_type in collision_scan_types and sx is not None and sy is not None and sz is not None:
         _wx, _wy, _hmin, _hmax = collision_scan_types[challenge_type]
@@ -431,7 +445,7 @@ def build_autopilot_world(tagger, cli, seed, start, goal, challenge_type,
         new_sx, new_sy, new_s_surface = _find_clear_platform_position(
             cli, sx, sy, start_surface, placement_rng, static_world_body_base,
             world_range_x=_wx, world_range_y=_wy, h_min=_hmin, h_max=_hmax,
-            min_obstacle_height=obstacle_height_filter, keep_uids=keep_uids,
+            min_obstacle_height=obstacle_height_filter, keep_uids=keep_uids, skip_below_z=floor_skip_z,
         )
         sx, sy = new_sx, new_sy
         if challenge_type == 4:
@@ -468,7 +482,7 @@ def build_autopilot_world(tagger, cli, seed, start, goal, challenge_type,
                 required_distance_max=required_distance_max,
                 preferred_distance=preferred_distance, distance_mode=distance_mode,
                 allow_candidate_fallback=challenge_type == 4,
-                min_obstacle_height=obstacle_height_filter, keep_uids=keep_uids,
+                min_obstacle_height=obstacle_height_filter, keep_uids=keep_uids, skip_below_z=floor_skip_z,
             )
             if challenge_type == 4:
                 new_gz = float(_raycast_surface_z(cli, new_gx, new_gy))
@@ -483,10 +497,10 @@ def build_autopilot_world(tagger, cli, seed, start, goal, challenge_type,
             adjusted_goal = (gx, gy, gz)
 
     if sx is not None and sy is not None and sz is not None:
-        if challenge_type in (2, 3):
+        if challenge_type in (2, 3, 10):
             sx, sy, surface_z = _find_flat_platform_spot(cli, sx, sy, C.START_PLATFORM_RADIUS)
             adjusted_start = (sx, sy, surface_z + C.START_PLATFORM_TAKEOFF_BUFFER)
-        elif challenge_type in (1, 4, 5, 6) and start_surface_z is not None:
+        elif challenge_type in (1, 4, 5, 6, 8, 9, 11) and start_surface_z is not None:
             surface_z = start_surface_z
         else:
             surface_z = _raycast_surface_z(cli, sx, sy)
@@ -497,7 +511,7 @@ def build_autopilot_world(tagger, cli, seed, start, goal, challenge_type,
         start_surface_z = start_top_z if challenge_type == 4 else surface_z
 
     if gx is not None and gy is not None and gz is not None:
-        if challenge_type in (2, 3):
+        if challenge_type in (2, 3, 10):
             orbit_r = C.PLATFORM_RADIUS_MAX if moving_platform else 0.0
             gx, gy, surface_z = _find_flat_platform_spot(
                 cli, gx, gy, C.START_PLATFORM_RADIUS, orbit_radius=orbit_r,

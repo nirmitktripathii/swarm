@@ -153,6 +153,10 @@ TYPE_LABELS = {
     5: "warehouse",
     6: "forest",
     7: "office",
+    8: "farmland",
+    9: "powerline",
+    10: "terraced_hills",
+    11: "river_coast",
 }
 
 
@@ -1670,8 +1674,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--type",
         type=int,
         default=None,
-        choices=[1, 2, 3, 4, 5, 6, 7],
-        help="Challenge type (1=City 2=Open 3=Mountain 4=Village 5=Warehouse 6=Forest 7=Office).",
+        choices=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+        help=("Challenge type (1=City 2=Open 3=Mountain 4=Village 5=Warehouse 6=Forest 7=Office "
+              "8=Farmland 9=Powerline 10=Terraced hills 11=River/coast)."),
     )
     visualize_parser.add_argument(
         "--family-id",
@@ -1800,8 +1805,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--type",
         type=int,
         default=None,
-        choices=[1, 2, 3, 4, 5, 6, 7],
-        help="Challenge type (1=City 2=Open 3=Mountain 4=Village 5=Warehouse 6=Forest 7=Office).",
+        choices=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+        help=("Challenge type (1=City 2=Open 3=Mountain 4=Village 5=Warehouse 6=Forest 7=Office "
+              "8=Farmland 9=Powerline 10=Terraced hills 11=River/coast)."),
     )
     video_parser.add_argument(
         "--seed-file",

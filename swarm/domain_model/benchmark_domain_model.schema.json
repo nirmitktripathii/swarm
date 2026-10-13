@@ -66,7 +66,11 @@
       "village",
       "warehouse",
       "forest",
-      "office"
+      "office",
+      "farmland",
+      "powerline",
+      "terraced_hills",
+      "river_coast"
     ]
   },
   "skills": {
@@ -1199,7 +1203,11 @@
       "4": "village",
       "5": "warehouse",
       "6": "forest",
-      "7": "office"
+      "7": "office",
+      "8": "farmland",
+      "9": "powerline",
+      "10": "terraced_hills",
+      "11": "river_coast"
     },
     "benchmark_group_to_environment_type": {
       "type1_city": "city",

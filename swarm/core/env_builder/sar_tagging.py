@@ -140,6 +140,31 @@ def enumerate_bodies(cli: int) -> list[int]:
     return [int(p.getBodyUniqueId(i, physicsClientId=cli)) for i in range(n)]
 
 
+# Opt-in biome maps (types 8-11): outside the benchmark distribution, built only when asked for.
+BIOME_CHALLENGE_TYPES = frozenset({8, 9, 10, 11})
+
+# Asset-dict buckets a map builder hands back, and the category each is tagged with.
+_ASSET_CATEGORIES = (
+    ("trees", BodyCategory.OBSTACLE_CANOPY),
+    ("props", BodyCategory.OBSTACLE_CLUTTER),
+    ("beams", BodyCategory.OBSTACLE_BEAM),
+    ("terrain", BodyCategory.SUPPORT_TERRAIN),
+)
+
+
+def _build_biome(challenge_type: int, cli: int, seed: int, safe_zones, safe_zone_radius: float) -> dict:
+    """Build one of the biome maps; each clamps its own clearing radius to the kit minimum."""
+    if challenge_type == 8:
+        from swarm.core.maps.farmland import build_farmland_map as build
+    elif challenge_type == 9:
+        from swarm.core.maps.powerline import build_powerline_map as build
+    elif challenge_type == 10:
+        from swarm.core.maps.terraced_hills import build_terraced_hills_map as build
+    else:
+        from swarm.core.maps.river_coast import build_river_coast_map as build
+    return build(cli, seed, safe_zones, safe_zone_radius)
+
+
 def build_and_tag_map(
     cli: int,
     seed: int,
@@ -162,6 +187,7 @@ def build_and_tag_map(
     from swarm.core.maps.open import build_open_world
     from swarm.core.maps.village import build_village_map
     from swarm.core.maps.warehouse import build_warehouse_map
+    from swarm.core.tof_wire_model import register_wires
 
     tagger = BodyTagger(cli)
     n_before = p.getNumBodies(physicsClientId=cli)
@@ -186,14 +212,16 @@ def build_and_tag_map(
         build_warehouse_map(seed=seed, cli=cli, start=start, goal=goal)
     elif challenge_type == 6:
         forest_assets = build_forest_map(cli, seed, safe_zones, max(safe_zone_radius, 8.0))
+    elif challenge_type in BIOME_CHALLENGE_TYPES:
+        forest_assets = _build_biome(challenge_type, cli, seed, safe_zones, safe_zone_radius)
     else:
         raise ValueError(f"unknown challenge_type {challenge_type}")
 
     if forest_assets:
-        for uid in forest_assets.get("trees", ()):
-            tagger.tag_existing(uid, BodyCategory.OBSTACLE_CANOPY)
-        for uid in forest_assets.get("props", ()):
-            tagger.tag_existing(uid, BodyCategory.OBSTACLE_CLUTTER)
+        for key, category in _ASSET_CATEGORIES:
+            for uid in forest_assets.get(key, ()):
+                tagger.tag_existing(uid, category)
+    register_wires(cli, (forest_assets or {}).get("wires", ()))
 
     n_after = p.getNumBodies(physicsClientId=cli)
     new_uids = enumerate_bodies(cli)[n_before:n_after]

@@ -88,6 +88,10 @@ def test_domain_model_schema_snapshot():
             "warehouse",
             "forest",
             "office",
+            "farmland",
+            "powerline",
+            "terraced_hills",
+            "river_coast",
         ],
         "challenge_type_to_environment_type": {
             1: "city",
@@ -97,6 +101,10 @@ def test_domain_model_schema_snapshot():
             5: "warehouse",
             6: "forest",
             7: "office",
+            8: "farmland",
+            9: "powerline",
+            10: "terraced_hills",
+            11: "river_coast",
         },
         "challenge_type_to_benchmark_group": {
             1: "type1_city",

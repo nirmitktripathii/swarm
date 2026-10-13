@@ -59,7 +59,9 @@ from swarm.validator.runtime_telemetry import tracker_call
 
 from .heartbeat import HeartbeatManager
 
-_EMPTY_PER_TYPE = tuple(ENVIRONMENT_TYPES) + ("moving_platform",)
+# The opt-in biome maps (challenge types 8-11) get no default bucket, so a stock score report keeps upstream's keys.
+_OPT_IN_ENVIRONMENT_TYPES = frozenset({"farmland", "powerline", "terraced_hills", "river_coast"})
+_EMPTY_PER_TYPE = tuple(t for t in ENVIRONMENT_TYPES if t not in _OPT_IN_ENVIRONMENT_TYPES) + ("moving_platform",)
 
 _INFRA_FAILURE_REASONS = frozenset(
     {FailureReason.INFRA.value} | {code.value for code in INFRA_FAULT_CODES}

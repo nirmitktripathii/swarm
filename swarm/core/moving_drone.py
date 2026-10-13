@@ -102,7 +102,9 @@ from swarm.constants import (
 from swarm.core.daylight import apply_seeded_sun, daylight_render_kwargs, sky_render_kwargs, sun_render_kwargs
 from swarm.core.env_builder.sar_types import BodyCategory
 from swarm.core.observation import assemble, assemble_batch, observation_space, observation_vector_dim
+from swarm.core.scenario import scenario_for_seed
 from swarm.core.sky_pack import load_sky_pack, pick_sky
+from swarm.core.tof_wire_model import apply_tof_wire_model, project_wires, sensor_from_env, wires_for
 from swarm.core.wind import SeededWind
 
 # Families that get 256 px depth, 30 m range, and the on-demand RGB action value.
@@ -358,6 +360,9 @@ class MovingDroneAviary(BaseRLAviary):
             os.environ.get("SWARM_BATCH_DEPTH", "1") != "0"
             and hasattr(p, "getDepthImagesBatch")
         )
+        # Opt-in ToF wire model (SWARM_TOF_WIRE_MODEL=<sensor>); None keeps the renderer's depth untouched.
+        self._tof_sensor = sensor_from_env()
+        self._tof_visibility = None  # ((map_seed, challenge_type), visibility_m), refreshed per episode
         backend = os.environ.get("SWARM_RENDER_BACKEND") or self.family_runtime.render_backend
         # The office family observes colour, which only TinyRenderer shades, so it stays there.
         self._raycast_enabled = backend == "raycast" and not self._office_rc_enabled
@@ -781,7 +786,7 @@ class MovingDroneAviary(BaseRLAviary):
         if getattr(self, "sar_mode", False):
             return False
         challenge_type = int(getattr(self.task, "challenge_type", 0))
-        if challenge_type not in (1, 4, 5, 6):
+        if challenge_type not in (1, 4, 5, 6, 8, 9, 11):
             return False
 
         safe = SAFETY_DISTANCE_SAFE_BY_TYPE.get(challenge_type, SAFETY_DISTANCE_SAFE)
@@ -1010,6 +1015,34 @@ class MovingDroneAviary(BaseRLAviary):
             seg_len = MAX_RAY_DISTANCE - ray_origin_offset
             return min(MAX_RAY_DISTANCE, ray_origin_offset + hit_frac * seg_len)
         return MAX_RAY_DISTANCE
+
+    def _apply_tof_wires(self, nth_drone: int, depth_raw: np.ndarray) -> np.ndarray:
+        """The z-buffer the configured ToF sensor class would have produced for the wires in view.
+
+        Wires the renderer drew but the sensor would miss are painted over with the background, and
+        wires the renderer lost but the sensor would range are written in (see tof_wire_model).
+        """
+        if self._tof_sensor is None:
+            return depth_raw
+        spans = wires_for(getattr(self, "CLIENT", 0))
+        if not spans:
+            return depth_raw
+        width, height = int(self.IMG_RES[0]), int(self.IMG_RES[1])
+        far = getattr(self, "_depth_far_m", DEPTH_FAR)
+        seed = int(getattr(self.task, "map_seed", 0) or 0) & 0xFFFFFFFF
+        challenge_type = int(getattr(self.task, "challenge_type", 0) or 0)
+        key = (seed, challenge_type)
+        if self._tof_visibility is None or self._tof_visibility[0] != key:
+            self._tof_visibility = (key, scenario_for_seed(seed, challenge_type).visibility_m)
+        wire_depth, wire_dia, wire_ref = project_wires(
+            spans, self._drone_camera_view(nth_drone), self._drone_proj_matrix(),
+            width, height, DEPTH_NEAR, far,
+        )
+        rng = np.random.default_rng([seed, int(self.step_counter), int(nth_drone)])
+        return apply_tof_wire_model(
+            np.asarray(depth_raw, dtype=np.float32).reshape(height, width), wire_depth, wire_dia, wire_ref,
+            self._tof_sensor, rng, near=DEPTH_NEAR, far=far, visibility_m=self._tof_visibility[1],
+        )
 
     def _process_depth(self, depth_buffer: np.ndarray, out: np.ndarray = None) -> np.ndarray:
         """Convert PyBullet depth buffer to a normalized depth map in [0,1].
@@ -1900,6 +1933,7 @@ class MovingDroneAviary(BaseRLAviary):
                 _, depth_raw, _ = self._getDroneImages(i)
             if depth_raw is None:
                 depth_raw = np.ones((int(self.IMG_RES[1]), int(self.IMG_RES[0])), dtype=np.float32)
+            depth_raw = self._apply_tof_wires(i, depth_raw)
             if self.RECORD or self.GUI:
                 self.dep[i] = depth_raw
             self._process_depth(depth_raw, out=depth_stack[i, :, :, 0])
@@ -1935,6 +1969,7 @@ class MovingDroneAviary(BaseRLAviary):
                 for key, space in self.observation_space.spaces.items()
             }
 
+        depth_raw = self._apply_tof_wires(0, depth_raw)
         if self.RECORD or self.GUI:
             self.dep[0] = depth_raw
         state_vec = self._getDroneStateVector(0)
