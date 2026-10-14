@@ -174,6 +174,8 @@ def _trace_header(env: Any, task: Any) -> Dict[str, Any]:
         "horizon": float(task.horizon),
         "start": [round(float(x), 3) for x in task.start],
         "goal": [round(float(x), 3) for x in task.goal],
+        "wind_max_mps": float(getattr(task, "wind_max_mps", 0.0) or 0.0),
+        "wind_active": getattr(env, "_wind", None) is not None,
         "moving": bool(getattr(env, "_moving", False)),
         "pattern": getattr(env, "_movement_pattern", None),
         "speed": float(getattr(env, "_platform_speed", 0.0)),
@@ -1293,7 +1295,7 @@ def record_flight(
     trace_file = None
     trace_target = os.environ.get(TRACE_ENV)
     if trace_target:
-        trace_file = open(trace_target, "w", encoding="utf-8")
+        trace_file = open(trace_target, "w", encoding="utf-8", buffering=1)  # line-buffered: survives a killed run
         trace_file.write(json.dumps(_trace_header(env, task)) + "\n")
     step_idx = 0
 
