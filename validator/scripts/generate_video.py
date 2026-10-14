@@ -157,6 +157,51 @@ _FRAME_EPS = 1e-9  # sim time is summed in floats; without this a frame due at 0
 _PHASE_SEC: Dict[str, float] = {"agent": 0.0, "step": 0.0, "raster": 0.0, "haze": 0.0, "encode": 0.0}
 PROGRESS_LOG_FRAMES = 50
 
+# Opt-in flight trace: set SWARM_VIDEO_TRACE to a file path and every TRACE_EVERY_STEPS-th simulation step
+# is appended there as one JSON line (drone and pad state), after a one-line header with the pad's motion.
+TRACE_ENV = "SWARM_VIDEO_TRACE"
+TRACE_EVERY_STEPS = 5
+
+
+def _trace_header(env: Any, task: Any) -> Dict[str, Any]:
+    """Static facts about the flight: where the pad is meant to be and how it was drawn to move."""
+    def vec(name: str) -> Optional[List[float]]:
+        value = getattr(env, name, None)
+        return None if value is None else [round(float(x), 3) for x in np.asarray(value).ravel()[:3]]
+
+    return {
+        "header": True,
+        "horizon": float(task.horizon),
+        "start": [round(float(x), 3) for x in task.start],
+        "goal": [round(float(x), 3) for x in task.goal],
+        "moving": bool(getattr(env, "_moving", False)),
+        "pattern": getattr(env, "_movement_pattern", None),
+        "speed": float(getattr(env, "_platform_speed", 0.0)),
+        "radius": float(getattr(env, "_platform_radius", 0.0)),
+        "delay": float(getattr(env, "_platform_delay", 0.0)),
+        "transition": float(getattr(env, "_platform_transition_time", 0.0)),
+        "phase": float(getattr(env, "_platform_phase", 0.0)),
+        "orbit_center": vec("_platform_orbit_center"),
+    }
+
+
+def _trace_row(env: Any, t_sim: float) -> Dict[str, Any]:
+    """One step of drone and pad state, rounded to keep a long flight under a few MB."""
+    state = np.asarray(env._getDroneStateVector(0))
+    pad = np.asarray(getattr(env, "_current_platform_pos", np.zeros(3)))
+    pad_vel = np.asarray(getattr(env, "_platform_velocity", np.zeros(3)))
+    return {
+        "t": round(float(t_sim), 3),
+        "pos": [round(float(x), 3) for x in state[0:3]],
+        "vel": [round(float(x), 3) for x in state[10:13]],
+        "rpy": [round(float(x), 3) for x in state[7:10]],
+        "pad": [round(float(x), 3) for x in pad[:3]],
+        "pad_vel": [round(float(x), 3) for x in pad_vel[:3]],
+        "hit": bool(getattr(env, "_platform_hit", False)),
+        "success": bool(getattr(env, "_success", False)),
+        "fail": str(getattr(env, "_failure_reason", "")),
+    }
+
 
 def _phase_summary(frames: int, wall_sec: float) -> str:
     """`agent=..s  step=..s  ...  frames=N  wall=..s` from the phase clocks of the flight so far."""
@@ -1245,6 +1290,13 @@ def record_flight(
         f"dist={dist_m:.1f}m  modes={modes}"
     )
 
+    trace_file = None
+    trace_target = os.environ.get(TRACE_ENV)
+    if trace_target:
+        trace_file = open(trace_target, "w", encoding="utf-8")
+        trace_file.write(json.dumps(_trace_header(env, task)) + "\n")
+    step_idx = 0
+
     try:
         while t_sim < task.horizon:
             # --- agent step ---
@@ -1277,6 +1329,9 @@ def record_flight(
             obs, _, terminated, truncated, info = env.step(act if n_drones > 1 else act[None, :])
             _PHASE_SEC["step"] += time.perf_counter() - phase_started
             t_sim += float(SIM_DT)
+            step_idx += 1
+            if trace_file is not None and (step_idx % TRACE_EVERY_STEPS == 0 or terminated or truncated):
+                trace_file.write(json.dumps(_trace_row(env, t_sim)) + "\n")
 
             # --- render frame ---
             if t_sim + _FRAME_EPS >= next_frame_t:
@@ -1310,6 +1365,8 @@ def record_flight(
                 break
 
     finally:
+        if trace_file is not None:
+            trace_file.close()
         # close writers before anything else to flush buffers
         for w in writers.values():
             try:
