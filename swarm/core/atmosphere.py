@@ -52,9 +52,29 @@ class Atmosphere:
             raise ValueError(f"haze_m must be positive, got {self.haze_m!r}")
 
 
+# Clear-air sky (horizon, zenith): the renderer's own background is flat white, so a clear day would
+# look unlit next to a foggy one. Warm when the sun is low, blue when it is high; blended between.
+_SKY_LOW_SUN = ((0.96, 0.74, 0.52), (0.36, 0.42, 0.66))
+_SKY_HIGH_SUN = ((0.78, 0.88, 0.98), (0.26, 0.50, 0.90))
+_LOW_SUN_DEG, _HIGH_SUN_DEG = 5.0, 35.0
+
+
+def clear_sky(sun_elevation_deg: float) -> Tuple[RGB, RGB]:
+    """(horizon, zenith) of a clear sky for a sun at this elevation."""
+    t = float(np.clip((sun_elevation_deg - _LOW_SUN_DEG) / (_HIGH_SUN_DEG - _LOW_SUN_DEG), 0.0, 1.0))
+    horizon, zenith = (
+        tuple((1.0 - t) * lo + t * hi for lo, hi in zip(low, high))
+        for low, high in zip(_SKY_LOW_SUN, _SKY_HIGH_SUN)
+    )
+    return horizon, zenith
+
+
 def atmosphere_for(spec) -> Atmosphere:
-    """The atmosphere of a `ScenarioSpec`."""
-    return Atmosphere(haze_m=float(spec.haze_m), fog_rgb=tuple(spec.fog_rgb()), sky=spec.sky())
+    """The atmosphere of a `ScenarioSpec`; a clear day gets a clear sky instead of the renderer's white."""
+    sky = spec.sky()
+    if sky is None:
+        sky = clear_sky(spec.sun.elevation_deg)
+    return Atmosphere(haze_m=float(spec.haze_m), fog_rgb=tuple(spec.fog_rgb()), sky=sky)
 
 
 def projection_planes(projection: Sequence[float]) -> Tuple[float, float]:

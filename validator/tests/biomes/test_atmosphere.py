@@ -27,6 +27,7 @@ from swarm.core.atmosphere import (
     Atmosphere,
     apply_atmosphere,
     atmosphere_for,
+    clear_sky,
     depth_metres,
     projection_planes,
 )
@@ -139,7 +140,34 @@ def test_fog_is_far_thicker_than_clear_air_for_a_scenario_spec():
     fog = atmosphere_for(sample_scenario(7, 8, season="summer", time_of_day="day", weather="fog"))
 
     assert fog.haze_m * 10 < clear.haze_m
-    assert fog.sky is not None and clear.sky is None
+    assert fog.sky is not None and clear.sky is not None
+
+
+def test_a_clear_day_gets_a_blue_sky_not_the_renderers_white():
+    clear = atmosphere_for(sample_scenario(7, 8, season="summer", time_of_day="day", weather="clear"))
+
+    horizon, zenith = clear.sky
+    assert zenith[2] > zenith[0] + 0.3, "zenith is clearly blue"
+    assert max(horizon) < 1.0 and min(horizon) > 0.4, "horizon is pale, never pure white"
+
+
+def test_a_low_sun_warms_the_horizon_and_a_high_sun_cools_it():
+    low_horizon, _ = clear_sky(5.0)
+    high_horizon, _ = clear_sky(35.0)
+
+    assert low_horizon[0] - low_horizon[2] > high_horizon[0] - high_horizon[2]
+
+
+@pytest.mark.parametrize("elevation", [-10.0, 0.0, 90.0])
+def test_the_clear_sky_stays_inside_the_colour_range_at_any_sun_elevation(elevation):
+    for colour in clear_sky(elevation):
+        assert all(0.0 <= c <= 1.0 for c in colour)
+
+
+def test_night_and_weather_skies_are_untouched_by_the_clear_sky():
+    night = sample_scenario(7, 8, time_of_day="night", weather="clear")
+
+    assert atmosphere_for(night).sky == night.sky()
 
 
 def test_night_fades_toward_a_dark_colour_not_a_pale_one():
