@@ -29,7 +29,7 @@ from swarm.core.scenario import render_kwargs, sample_scenario
 SEED, CHALLENGE_TYPE = 7, 8
 FIXED_LIGHT = [0.4, 0.4, 1.0]
 # the keyword arguments stock pybullet's getCameraImage takes, as used by the video cameras
-STOCK_KWARGS = {"width", "height", "viewMatrix", "projectionMatrix", "renderer", "shadow",
+STOCK_KWARGS = {"width", "height", "viewMatrix", "projectionMatrix", "renderer", "shadow", "flags",
                 "physicsClientId", "lightDirection", "lightColor", "lightAmbientCoeff",
                 "lightDiffuseCoeff"}
 PROJECTION = p.computeProjectionMatrixFOV(60.0, 1.6, 0.1, 100.0)

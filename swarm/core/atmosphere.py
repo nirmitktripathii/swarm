@@ -102,20 +102,34 @@ def apply_atmosphere(rgb: np.ndarray, zbuf: np.ndarray, near: float, far: float,
     frame = np.asarray(rgb)
     h, w = frame.shape[:2]
     z = np.asarray(zbuf, dtype=np.float32).reshape(h, w)
-    base = frame[..., :3].astype(np.float32) / 255.0
 
-    keep = np.exp(-depth_metres(z, near, far) / atm.haze_m)[..., None]
-    out = base * keep + np.asarray(atm.fog_rgb, dtype=np.float32) * (1.0 - keep)
+    # Runs once per rendered frame, so it works in place on one (h, 3w) float32 buffer: broadcasting a
+    # (h, w, 1) factor over the 3-wide colour axis is several times slower than a contiguous multiply.
+    # keep = exp(-depth / haze) with depth = far * near / (far - (far - near) * z), as in depth_metres.
+    denom = np.multiply(z, np.float32(-(far - near)))
+    denom += np.float32(far)
+    np.maximum(denom, np.float32(near * 1e-6), out=denom)
+    keep = np.divide(np.float32(-far * near / atm.haze_m), denom)
+    np.exp(keep, out=keep)
 
-    sky_mask = (z >= _SKY_DEPTH)[..., None]
-    if atm.sky is None:
-        out = np.where(sky_mask, base, out)
-    elif sky_mask.any():
-        horizon = np.asarray(atm.sky[0], dtype=np.float32)
-        zenith = np.asarray(atm.sky[1], dtype=np.float32)
-        lowest_sky_row = np.flatnonzero(sky_mask[..., 0].any(axis=1)).max()
-        t = np.clip(np.arange(h, dtype=np.float32) / max(float(lowest_sky_row), 1.0), 0.0, 1.0)[:, None, None]
-        gradient = np.broadcast_to(zenith * (1.0 - t) + horizon * t, out.shape)
-        out = np.where(sky_mask, gradient, out)
+    fog = np.tile(np.asarray(atm.fog_rgb, dtype=np.float32) * 255.0, w)
+    out = frame[..., :3].astype(np.float32).reshape(h, w * 3)
+    out -= fog
+    out *= np.repeat(keep, 3, axis=1)
+    out += fog + np.float32(0.5)  # the half is the rounding: astype(uint8) truncates
 
-    return np.clip(np.rint(out * 255.0), 0, 255).astype(np.uint8)
+    sky_mask = z >= _SKY_DEPTH
+    if sky_mask.any():
+        mask3 = np.repeat(sky_mask, 3, axis=1)
+        if atm.sky is None:
+            kept = frame[..., :3].reshape(h, w * 3).astype(np.float32) + np.float32(0.5)
+            np.copyto(out, kept, where=mask3)
+        else:
+            horizon = np.asarray(atm.sky[0], dtype=np.float32) * 255.0
+            zenith = np.asarray(atm.sky[1], dtype=np.float32) * 255.0
+            lowest_sky_row = np.flatnonzero(sky_mask.any(axis=1)).max()
+            t = np.clip(np.arange(h, dtype=np.float32) / max(float(lowest_sky_row), 1.0), 0.0, 1.0)[:, None]
+            rows = zenith * (1.0 - t) + horizon * t + np.float32(0.5)
+            np.copyto(out, np.tile(rows, (1, w)), where=mask3)
+
+    return out.astype(np.uint8).reshape(h, w, 3)

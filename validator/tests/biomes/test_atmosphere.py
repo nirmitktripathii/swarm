@@ -170,6 +170,34 @@ def test_night_and_weather_skies_are_untouched_by_the_clear_sky():
     assert atmosphere_for(night).sky == night.sky()
 
 
+@pytest.mark.parametrize("sky", [None, (HORIZON, ZENITH)])
+def test_the_in_place_pass_matches_the_plain_formula(sky):
+    """apply_atmosphere is tuned for speed; it must still be the Beer-Lambert blend plus the sky."""
+    rng = np.random.default_rng(3)
+    h, w = 40, 56
+    rgb = rng.integers(0, 256, (h, w, 4), dtype=np.uint8)
+    distance = rng.uniform(0.3, 90.0, (h, w)).astype(np.float32)  # inside the far plane: no stray sky
+    z = ((FAR - FAR * NEAR / distance) / (FAR - NEAR)).astype(np.float32)
+    z[:12] = 1.0  # sky rows
+    atm = Atmosphere(haze_m=120.0, fog_rgb=(0.7, 0.6, 0.5), sky=sky)
+
+    keep = np.exp(-depth_metres(z, NEAR, FAR) / atm.haze_m)[..., None]
+    base = rgb[..., :3].astype(np.float32) / 255.0
+    expected = base * keep + np.asarray(atm.fog_rgb, dtype=np.float32) * (1.0 - keep)
+    sky_rows = (z >= 1.0 - 1e-6)[..., None]
+    if sky is None:
+        expected = np.where(sky_rows, base, expected)
+    else:
+        t = np.clip(np.arange(h, dtype=np.float32) / 11.0, 0.0, 1.0)[:, None, None]
+        gradient = np.asarray(ZENITH, np.float32) * (1.0 - t) + np.asarray(HORIZON, np.float32) * t
+        expected = np.where(sky_rows, np.broadcast_to(gradient, expected.shape), expected)
+    expected = np.clip(np.rint(expected * 255.0), 0, 255).astype(np.uint8)
+
+    out = apply_atmosphere(rgb, z, NEAR, FAR, atm)
+
+    assert np.abs(out.astype(int) - expected.astype(int)).max() <= 1
+
+
 def test_night_fades_toward_a_dark_colour_not_a_pale_one():
     night = atmosphere_for(sample_scenario(7, 8, time_of_day="night", weather="clear"))
     day = atmosphere_for(sample_scenario(7, 8, time_of_day="day", weather="haze"))

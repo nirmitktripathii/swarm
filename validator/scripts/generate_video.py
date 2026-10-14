@@ -149,6 +149,11 @@ CHASE_DISTANCE_BACK_M = 2.5
 CHASE_HEIGHT_ABOVE_M = 1.0
 CHASE_FOV_DEG = 65.0
 CHASE_SMOOTHING = 0.92  # exponential smoothing (higher = smoother)
+CHASE_POSITION_SMOOTHING = 0.5  # same, for where the camera sits: takes the airframe's tremor out of the shot
+_FRAME_EPS = 1e-9  # sim time is summed in floats; without this a frame due at 0.04 s can slip a whole step
+
+# Wall seconds spent per phase of the flight in progress, printed once at the end of the clip.
+_PHASE_SEC: Dict[str, float] = {"agent": 0.0, "step": 0.0, "raster": 0.0, "haze": 0.0, "encode": 0.0}
 
 # --- first-person view ---
 FPV_FOV_DEG = 90.0
@@ -382,6 +387,7 @@ def _render_rgb(cli: int, view, proj, w: int, h: int) -> np.ndarray:
     import pybullet as p
 
     look = {"lightDirection": [0.4, 0.4, 1.0], **_RENDER_LOOK}
+    started = time.perf_counter()
     _, _, rgba, zbuf, _ = p.getCameraImage(
         width=w,
         height=h,
@@ -389,16 +395,21 @@ def _render_rgb(cli: int, view, proj, w: int, h: int) -> np.ndarray:
         projectionMatrix=proj,
         renderer=p.ER_TINY_RENDERER,
         shadow=0,
+        flags=p.ER_NO_SEGMENTATION_MASK,  # the mask is never read; skipping it saves a per-pixel pass
         physicsClientId=cli,
         **look,
     )
     rgb = np.asarray(rgba, dtype=np.uint8).reshape(h, w, 4)[:, :, :3]
+    rastered = time.perf_counter()
+    _PHASE_SEC["raster"] += rastered - started
     if _ATMOSPHERE is None:
         return rgb
     from swarm.core.atmosphere import apply_atmosphere, projection_planes
 
     near, far = projection_planes(proj)
-    return apply_atmosphere(rgb, np.asarray(zbuf).reshape(h, w), near, far, _ATMOSPHERE)
+    framed = apply_atmosphere(rgb, np.asarray(zbuf).reshape(h, w), near, far, _ATMOSPHERE)
+    _PHASE_SEC["haze"] += time.perf_counter() - rastered
+    return framed
 
 
 def _render_depth(
@@ -577,6 +588,7 @@ class ChaseCamera(_CameraBase):
         self._back = back
         self._up = up
         self._smooth_fwd: Optional[np.ndarray] = None
+        self._smooth_pos: Optional[np.ndarray] = None
 
     def capture(self, drone_pos, drone_quat, rot, dt):
         """Render from behind and above the airframe, aimed slightly over its centre."""
@@ -591,8 +603,14 @@ class ChaseCamera(_CameraBase):
         fwd /= np.linalg.norm(fwd) + 1e-9
         self._smooth_fwd = fwd
 
-        eye = drone_pos - fwd * self._back + np.array([0.0, 0.0, self._up])
-        tgt = drone_pos + np.array([0.0, 0.0, 0.15])
+        # The camera follows a low-passed position, so the airframe's own tremor moves the drone in the
+        # frame instead of shaking the whole scene; the lag is about one frame.
+        b = CHASE_POSITION_SMOOTHING
+        pos = np.asarray(drone_pos, dtype=float)
+        self._smooth_pos = pos if self._smooth_pos is None else b * self._smooth_pos + (1 - b) * pos
+
+        eye = self._smooth_pos - fwd * self._back + np.array([0.0, 0.0, self._up])
+        tgt = self._smooth_pos + np.array([0.0, 0.0, 0.15])
         return _render_rgb(
             self._cli, self._view(eye, tgt), self._proj(), self._w, self._h
         )
@@ -1202,6 +1220,8 @@ def record_flight(
     t_sim = 0.0
     success = False
     t_wall_start = time.time()
+    for name in _PHASE_SEC:
+        _PHASE_SEC[name] = 0.0
 
     if progress_file:
         progress_file = Path(progress_file)
@@ -1220,6 +1240,7 @@ def record_flight(
     try:
         while t_sim < task.horizon:
             # --- agent step ---
+            phase_started = time.perf_counter()
             if replay_actions is not None and replay_idx < len(replay_actions):
                 act = np.clip(replay_actions[replay_idx], act_lo, act_hi)
                 replay_idx += 1
@@ -1242,19 +1263,24 @@ def record_flight(
                     act = np.clip(act, act_lo, act_hi)
 
             recorded_actions.append(act.tolist())
+            _PHASE_SEC["agent"] += time.perf_counter() - phase_started
 
+            phase_started = time.perf_counter()
             obs, _, terminated, truncated, info = env.step(act if n_drones > 1 else act[None, :])
+            _PHASE_SEC["step"] += time.perf_counter() - phase_started
             t_sim += float(SIM_DT)
 
             # --- render frame ---
-            if t_sim >= next_frame_t:
+            if t_sim + _FRAME_EPS >= next_frame_t:
                 drone_pos = np.asarray(env._getDroneStateVector(0)[:3])
                 drone_quat = np.asarray(env.quat[0])
                 rot = np.array(p.getMatrixFromQuaternion(drone_quat)).reshape(3, 3)
 
                 for mode, cam in cameras.items():
                     frame = cam.capture(drone_pos, drone_quat, rot, frame_dt)
+                    phase_started = time.perf_counter()
                     writers[mode].append_data(frame)
+                    _PHASE_SEC["encode"] += time.perf_counter() - phase_started
 
                 frame_count += 1
                 next_frame_t += frame_dt
@@ -1307,6 +1333,11 @@ def record_flight(
 
     wall_sec = time.time() - t_wall_start
     video_sec = frame_count / fps if fps else 0.0
+    print(
+        "[video] timing  "
+        + "  ".join(f"{name}={sec:.1f}s" for name, sec in _PHASE_SEC.items())
+        + f"  frames={frame_count}  wall={wall_sec:.1f}s"
+    )
 
     # --- summary --------------------------------------------------------
     results: List[VideoResult] = []
