@@ -73,6 +73,15 @@ def test_the_default_smoothing_is_on():
     assert 0.0 < generate_video.CHASE_POSITION_SMOOTHING < 1.0
 
 
+def test_the_phase_summary_names_every_phase_and_the_frame_count(monkeypatch):
+    monkeypatch.setattr(generate_video, "_PHASE_SEC",
+                        {"agent": 1.25, "step": 2.0, "raster": 30.5, "haze": 0.0, "encode": 0.4})
+
+    line = generate_video._phase_summary(120, 40.04)
+
+    assert line == "agent=1.2s  step=2.0s  raster=30.5s  haze=0.0s  encode=0.4s  frames=120  wall=40.0s"
+
+
 @pytest.mark.parametrize("fps", [10, 25, 50])  # whole numbers of 50 Hz steps per frame
 def test_frames_land_on_every_nth_step_with_no_float_drift(fps):
     """The loop's own due-test, over a long flight: after the first frame, one constant gap in steps."""

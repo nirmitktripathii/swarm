@@ -152,8 +152,16 @@ CHASE_SMOOTHING = 0.92  # exponential smoothing (higher = smoother)
 CHASE_POSITION_SMOOTHING = 0.5  # same, for where the camera sits: takes the airframe's tremor out of the shot
 _FRAME_EPS = 1e-9  # sim time is summed in floats; without this a frame due at 0.04 s can slip a whole step
 
-# Wall seconds spent per phase of the flight in progress, printed once at the end of the clip.
+# Wall seconds spent per phase of the flight in progress, printed every PROGRESS_LOG_FRAMES frames
+# (so a clip that is killed at a wall cap still says where its time went) and once at the end.
 _PHASE_SEC: Dict[str, float] = {"agent": 0.0, "step": 0.0, "raster": 0.0, "haze": 0.0, "encode": 0.0}
+PROGRESS_LOG_FRAMES = 50
+
+
+def _phase_summary(frames: int, wall_sec: float) -> str:
+    """`agent=..s  step=..s  ...  frames=N  wall=..s` from the phase clocks of the flight so far."""
+    phases = "  ".join(f"{name}={sec:.1f}s" for name, sec in _PHASE_SEC.items())
+    return f"{phases}  frames={frames}  wall={wall_sec:.1f}s"
 
 # --- first-person view ---
 FPV_FOV_DEG = 90.0
@@ -1284,6 +1292,9 @@ def record_flight(
 
                 frame_count += 1
                 next_frame_t += frame_dt
+                if frame_count % PROGRESS_LOG_FRAMES == 0:
+                    print(f"[video] progress  {_phase_summary(frame_count, time.time() - t_wall_start)}",
+                          flush=True)
 
                 if progress_file and frame_count % 20 == 0:
                     _write_progress(progress_file, {
@@ -1333,11 +1344,7 @@ def record_flight(
 
     wall_sec = time.time() - t_wall_start
     video_sec = frame_count / fps if fps else 0.0
-    print(
-        "[video] timing  "
-        + "  ".join(f"{name}={sec:.1f}s" for name, sec in _PHASE_SEC.items())
-        + f"  frames={frame_count}  wall={wall_sec:.1f}s"
-    )
+    print(f"[video] timing  {_phase_summary(frame_count, wall_sec)}")
 
     # --- summary --------------------------------------------------------
     results: List[VideoResult] = []
