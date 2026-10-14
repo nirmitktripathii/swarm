@@ -64,3 +64,28 @@ def test_the_header_names_the_pad_motion():
     assert header["pattern"] == "figure8"
     assert header["orbit_center"] == [4.0, 5.0, 0.6]
     assert header["horizon"] == 90.0
+
+
+def _task():
+    return SimpleNamespace(map_seed=835397, wind_max_mps=0.0, wind_turbulence=0.0, wind_gusts=0)
+
+
+def test_scenario_wind_stays_a_label_unless_switched_on(monkeypatch):
+    monkeypatch.delenv(generate_video.ENV_SCENARIO_WIND, raising=False)
+    task = _task()
+
+    assert generate_video._apply_scenario_wind(task, 3) == {}
+    assert task.wind_max_mps == 0.0
+
+
+def test_scenario_wind_reaches_the_task_when_switched_on(monkeypatch):
+    from swarm.core.scenario import scenario_for_seed
+
+    monkeypatch.setenv(generate_video.ENV_SCENARIO_WIND, "1")
+    expected = scenario_for_seed(835397, 3).wind_max_mps
+    task = _task()
+
+    fields = generate_video._apply_scenario_wind(task, 3)
+
+    assert task.wind_max_mps == expected
+    assert (fields == {}) == (expected <= 0.0)

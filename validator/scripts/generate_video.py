@@ -437,6 +437,23 @@ def _apply_scenario_look(map_seed: int, challenge_type: int) -> Optional[Any]:
     return spec
 
 
+ENV_SCENARIO_WIND = "SWARM_SCENARIO_WIND"
+
+
+def _apply_scenario_wind(task: Any, challenge_type: int) -> Dict[str, Any]:
+    """Give the task the seed's scenario wind when SWARM_SCENARIO_WIND is on. Off, the wind in the scenario
+    label never reaches the physics (no map opts in via WIND_BY_MAP). Returns the fields applied."""
+    if os.environ.get(ENV_SCENARIO_WIND, "").strip().lower() not in ("1", "true", "yes", "on"):
+        return {}
+    from swarm.core.scenario import scenario_for_seed
+
+    fields = scenario_for_seed(int(task.map_seed), int(challenge_type)).wind_task_fields()
+    for name, value in fields.items():
+        setattr(task, name, value)
+    print(f"[video] scenario wind: {fields or 'calm'}")
+    return fields
+
+
 def _render_rgb(cli: int, view, proj, w: int, h: int) -> np.ndarray:
     """RGB render with shadows disabled for performance."""
     import pybullet as p
@@ -1217,6 +1234,7 @@ def record_flight(
     # --- environment ----------------------------------------------------
     task = build_task(seed, challenge_type, family_id=family_id)
     _apply_scenario_look(getattr(task, "map_seed", seed), challenge_type)
+    _apply_scenario_wind(task, challenge_type)
     _ensure_local_ansible_temp()
     from swarm.utils.env_factory import make_env
 
